@@ -1506,11 +1506,27 @@ async def cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Отменено.", reply_markup=back_to_admin())
     return ConversationHandler.END
 
+
 async def fallback_to_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Универсальный fallback — завершает диалог при нажатии любой кнопки."""
+    """Fallback для admin ConversationHandler'ов: при любой кнопке возвращает в админ-панель."""
     query = update.callback_query
     if query:
         await query.answer()
+        try:
+            await query.edit_message_text(
+                "⚙️ *Админ-панель*\n\nВыберите действие:",
+                reply_markup=admin_keyboard(),
+                parse_mode="Markdown"
+            )
+        except Exception:
+            try:
+                await query.message.reply_text(
+                    "⚙️ *Админ-панель*\n\nВыберите действие:",
+                    reply_markup=admin_keyboard(),
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.error(f"fallback_to_handler error: {e}")
     return ConversationHandler.END
 
 
@@ -1675,7 +1691,10 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     client_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(show_classes, pattern="^book$")],
+        entry_points=[
+            CallbackQueryHandler(show_classes, pattern="^book$"),
+            CallbackQueryHandler(select_class,  pattern="^select_"),
+        ],
         states={
             CHOOSE_CLASS: [
                 CallbackQueryHandler(select_class, pattern="^select_"),
