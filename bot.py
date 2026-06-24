@@ -21,10 +21,34 @@ BOT_TOKEN         = "8559079528:AAEOXFQcqwMmAqi0H-b67vozQuhYsBa_mXc"
 ADMIN_CHAT_ID     = 334195585  # главный админ (всегда)
 CHANNEL_USERNAME  = "@JJewelryNhaTrang"
 
-# Папка для данных — при Railway Volume монтируется в /app/data
-# При переносе на БД — заменить функции load_json/save_json на SQL-запросы
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# ══════════════════════════════════════════
+#  ПУТИ К ДАННЫМ
+#  ⚠️  ВАЖНО ДЛЯ RAILWAY:
+#  Чтобы данные не сбрасывались при деплое —
+#  добавьте Volume в Railway и укажите путь /app/data
+#  (Settings → Volumes → Mount Path: /app/data)
+#  Без Volume данные хранятся в /tmp и ТЕРЯЮТСЯ при каждом деплое!
+# ══════════════════════════════════════════
 DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
-os.makedirs(DATA_DIR, exist_ok=True)
+
+# Проверяем доступность папки, если нет — используем /tmp (данные не сохраняются между деплоями)
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    # Тест на запись
+    _test = os.path.join(DATA_DIR, ".write_test")
+    with open(_test, "w") as _f:
+        _f.write("ok")
+    os.remove(_test)
+except Exception:
+    DATA_DIR = "/tmp/bot_data"
+    os.makedirs(DATA_DIR, exist_ok=True)
+    logger.warning(f"⚠️ Папка /app/data недоступна! Данные хранятся в {DATA_DIR} и будут потеряны при перезапуске. Подключите Railway Volume!")
 
 BOOKINGS_FILE = os.path.join(DATA_DIR, "bookings.json")
 CLASSES_FILE  = os.path.join(DATA_DIR, "classes.json")
@@ -62,12 +86,6 @@ ADD_ADMIN_ID = 12
 (BROADCAST_TARGET, BROADCAST_SELECT_CLASS, BROADCAST_TEXT) = range(20, 23)
 (MC_TITLE, MC_DATE, MC_DURATION, MC_PRICE, MC_SPOTS, MC_DESC, MC_VENUE_NAME, MC_VENUE_URL) = range(30, 38)
 (EDIT_MC_CHOOSE, EDIT_MC_FIELD, EDIT_MC_VALUE) = range(40, 43)
-
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════
@@ -1224,8 +1242,10 @@ async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = context.user_data.get("broadcast_target", "broadcast_all")
     bookings = load_bookings()
     if target == "broadcast_all":
-        user_ids = list({b["user_id"] for b in bookings if b["status"] == "confirmed"})
-        label = "всем пользователям"
+        # Берём всех пользователей кто когда-либо писал боту
+        settings = load_settings()
+        user_ids = list(set(settings.get("known_users", [])))
+        label = "всем пользователям бота"
     else:
         class_id = int(target.split("_")[2])
         user_ids = list({b["user_id"] for b in bookings if b["class_id"] == class_id and b["status"] == "confirmed"})
@@ -1432,7 +1452,8 @@ async def admin_edit_mc(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def edit_mc_field_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    field = query.data.split("_")[2]
+    # callback: "edit_field_venue_name" -> убираем префикс "edit_field_"
+    field = query.data[len("edit_field_"):]
     context.user_data["editing_field"] = field
     label = FIELD_LABELS.get(field, field)
     hints = {
@@ -1646,34 +1667,22 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    # Универсальный обработчик — завершает диалог и передаёт управление другим handlers
-    async def fallback_to_handler(update, context):
-        """Завершает ConversationHandler и передаёт callback дальше"""
-        return ConversationHandler.END
-
     client_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(show_classes, pattern="^book$")],
         states={
             CHOOSE_CLASS: [
-                CallbackQueryHandler(select_class,  pattern="^select_"),
-                CallbackQueryHandler(ask_name,      pattern="^confirm_class$"),
-                CallbackQueryHandler(show_classes,  pattern="^book$"),
-                # Завершаем диалог при нажатии любой внешней кнопки
-                CallbackQueryHandler(fallback_to_handler, pattern="^(main_menu|admin_panel|my_bookings|help|admin_|user_move_|user_cancel_|attend_)"),
+                CallbackQueryHandler(select_class, pattern="^select_"),
+                CallbackQueryHandler(ask_name,     pattern="^confirm_class$"),
+                CallbackQueryHandler(show_classes, pattern="^book$"),
             ],
             GET_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_name),
-                # Если пользователь нажал кнопку вместо ввода текста — завершаем диалог
-                CallbackQueryHandler(fallback_to_handler),
             ],
             CONFIRM: [
                 CallbackQueryHandler(final_confirm, pattern="^final_confirm$"),
-                CallbackQueryHandler(fallback_to_handler, pattern="^(main_menu|book|my_bookings|help)"),
             ],
         },
         fallbacks=[
-            CallbackQueryHandler(main_menu_callback, pattern="^main_menu$"),
-            CallbackQueryHandler(fallback_to_handler, pattern="^(admin_panel|my_bookings|help|admin_|user_)"),
             CommandHandler("start",  start),
             CommandHandler("admin",  admin_panel_cmd),
             CommandHandler("book",   cmd_book),
@@ -1760,20 +1769,23 @@ def main():
         allow_reentry=True,
     )
 
+    # ── Команды ────────────────────────────────────────────────────────────
     app.add_handler(CommandHandler("start",      start))
     app.add_handler(CommandHandler("admin",      admin_panel_cmd))
     app.add_handler(CommandHandler("book",       cmd_book))
     app.add_handler(CommandHandler("mybookings", cmd_mybookings))
     app.add_handler(CommandHandler("move",       cmd_move))
     app.add_handler(CommandHandler("cancel",     cmd_cancel))
-    app.add_handler(client_conv)
+
+    # ── Админ: ConversationHandlers (нужны до client_conv) ─────────────────
     app.add_handler(welcome_conv)
     app.add_handler(new_greeting_conv)
     app.add_handler(add_admin_conv)
-    app.add_handler(CallbackQueryHandler(admin_remove_admin, pattern="^admin_remove_"))
     app.add_handler(broadcast_conv)
     app.add_handler(add_mc_conv)
     app.add_handler(edit_mc_conv)
+
+    # ── Админ: простые колбэки (ОБЯЗАТЕЛЬНО до client_conv) ────────────────
     app.add_handler(CallbackQueryHandler(admin_panel,             pattern="^admin_panel$"))
     app.add_handler(CallbackQueryHandler(admin_bookings,          pattern="^admin_bookings$"))
     app.add_handler(CallbackQueryHandler(admin_classes,           pattern="^admin_classes$"))
@@ -1784,10 +1796,12 @@ def main():
     app.add_handler(CallbackQueryHandler(reschedule_to_class,     pattern="^reschedule_to_"))
     app.add_handler(CallbackQueryHandler(admin_delete_mc,         pattern="^admin_delete_mc_"))
     app.add_handler(CallbackQueryHandler(confirm_delete_mc,       pattern="^confirm_delete_mc_"))
+    app.add_handler(CallbackQueryHandler(admin_remove_admin,      pattern="^admin_remove_"))
+
+    # ── Пользователь: простые колбэки (ОБЯЗАТЕЛЬНО до client_conv) ─────────
+    app.add_handler(CallbackQueryHandler(main_menu_callback,      pattern="^main_menu$"))
     app.add_handler(CallbackQueryHandler(my_bookings,             pattern="^my_bookings$"))
     app.add_handler(CallbackQueryHandler(help_callback,           pattern="^help$"))
-    app.add_handler(CallbackQueryHandler(main_menu_callback,      pattern="^main_menu$"))
-    # Подтверждение/перенос от пользователя
     app.add_handler(CallbackQueryHandler(attendance_confirm,       pattern="^attend_confirm_"))
     app.add_handler(CallbackQueryHandler(attendance_reschedule,    pattern="^attend_reschedule_"))
     app.add_handler(CallbackQueryHandler(attendance_cancel,        pattern="^attend_cancel_"))
@@ -1795,6 +1809,9 @@ def main():
     app.add_handler(CallbackQueryHandler(user_move_booking,        pattern="^user_move_"))
     app.add_handler(CallbackQueryHandler(user_cancel_booking,      pattern="^user_cancel_[0-9]+$"))
     app.add_handler(CallbackQueryHandler(user_cancel_confirm,      pattern="^user_cancel_confirm_"))
+
+    # ── Диалог записи (после всех явных колбэков) ──────────────────────────
+    app.add_handler(client_conv)
 
     # Напоминания каждые 30 минут
     scheduler = AsyncIOScheduler()
