@@ -1646,6 +1646,11 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
+    # Универсальный обработчик — завершает диалог и передаёт управление другим handlers
+    async def fallback_to_handler(update, context):
+        """Завершает ConversationHandler и передаёт callback дальше"""
+        return ConversationHandler.END
+
     client_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(show_classes, pattern="^book$")],
         states={
@@ -1653,65 +1658,106 @@ def main():
                 CallbackQueryHandler(select_class,  pattern="^select_"),
                 CallbackQueryHandler(ask_name,      pattern="^confirm_class$"),
                 CallbackQueryHandler(show_classes,  pattern="^book$"),
+                # Завершаем диалог при нажатии любой внешней кнопки
+                CallbackQueryHandler(fallback_to_handler, pattern="^(main_menu|admin_panel|my_bookings|help|admin_|user_move_|user_cancel_|attend_)"),
             ],
-            GET_NAME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            CONFIRM:   [CallbackQueryHandler(final_confirm, pattern="^final_confirm$")],
+            GET_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_name),
+                # Если пользователь нажал кнопку вместо ввода текста — завершаем диалог
+                CallbackQueryHandler(fallback_to_handler),
+            ],
+            CONFIRM: [
+                CallbackQueryHandler(final_confirm, pattern="^final_confirm$"),
+                CallbackQueryHandler(fallback_to_handler, pattern="^(main_menu|book|my_bookings|help)"),
+            ],
         },
         fallbacks=[
             CallbackQueryHandler(main_menu_callback, pattern="^main_menu$"),
+            CallbackQueryHandler(fallback_to_handler, pattern="^(admin_panel|my_bookings|help|admin_|user_)"),
+            CommandHandler("start",  start),
+            CommandHandler("admin",  admin_panel_cmd),
+            CommandHandler("book",   cmd_book),
             CommandHandler("cancel", cancel_conv),
         ],
+        allow_reentry=True,
     )
 
     welcome_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_welcome_start, pattern="^admin_welcome$")],
-        states={EDIT_WELCOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_welcome_save)]},
-        fallbacks=[CommandHandler("cancel", cancel_conv)],
+        states={EDIT_WELCOME: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, admin_welcome_save),
+            CallbackQueryHandler(fallback_to_handler),
+        ]},
+        fallbacks=[CommandHandler("cancel", cancel_conv), CallbackQueryHandler(fallback_to_handler)],
+        allow_reentry=True,
     )
 
     new_greeting_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_new_greeting_start, pattern="^admin_new_greeting$")],
-        states={EDIT_NEW_GREETING: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_new_greeting_save)]},
-        fallbacks=[CommandHandler("cancel", cancel_conv)],
+        states={EDIT_NEW_GREETING: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, admin_new_greeting_save),
+            CallbackQueryHandler(fallback_to_handler),
+        ]},
+        fallbacks=[CommandHandler("cancel", cancel_conv), CallbackQueryHandler(fallback_to_handler)],
+        allow_reentry=True,
     )
 
     add_admin_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_add_admin_start, pattern="^admin_add_admin$")],
-        states={ADD_ADMIN_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_admin_save)]},
-        fallbacks=[CommandHandler("cancel", cancel_conv)],
+        states={ADD_ADMIN_ID: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_admin_save),
+            CallbackQueryHandler(fallback_to_handler),
+        ]},
+        fallbacks=[CommandHandler("cancel", cancel_conv), CallbackQueryHandler(fallback_to_handler)],
+        allow_reentry=True,
     )
 
     broadcast_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_broadcast_start, pattern="^admin_broadcast$")],
         states={
-            BROADCAST_TARGET: [CallbackQueryHandler(broadcast_target_chosen, pattern="^broadcast_")],
-            BROADCAST_TEXT:   [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_send)],
+            BROADCAST_TARGET: [
+                CallbackQueryHandler(broadcast_target_chosen, pattern="^broadcast_"),
+                CallbackQueryHandler(fallback_to_handler),
+            ],
+            BROADCAST_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_send),
+                CallbackQueryHandler(fallback_to_handler),
+            ],
         },
-        fallbacks=[CommandHandler("cancel", cancel_conv)],
+        fallbacks=[CommandHandler("cancel", cancel_conv), CallbackQueryHandler(fallback_to_handler)],
+        allow_reentry=True,
     )
 
     add_mc_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_add_mc_start, pattern="^admin_add_mc$")],
         states={
-            MC_TITLE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_title)],
-            MC_DATE:       [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_date)],
-            MC_DURATION:   [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_duration)],
-            MC_PRICE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_price)],
-            MC_SPOTS:      [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_spots)],
-            MC_DESC:       [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_desc)],
-            MC_VENUE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_venue_name)],
-            MC_VENUE_URL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_venue_url)],
+            MC_TITLE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_title),      CallbackQueryHandler(fallback_to_handler)],
+            MC_DATE:       [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_date),       CallbackQueryHandler(fallback_to_handler)],
+            MC_DURATION:   [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_duration),   CallbackQueryHandler(fallback_to_handler)],
+            MC_PRICE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_price),      CallbackQueryHandler(fallback_to_handler)],
+            MC_SPOTS:      [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_spots),      CallbackQueryHandler(fallback_to_handler)],
+            MC_DESC:       [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_desc),       CallbackQueryHandler(fallback_to_handler)],
+            MC_VENUE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_venue_name), CallbackQueryHandler(fallback_to_handler)],
+            MC_VENUE_URL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_venue_url),  CallbackQueryHandler(fallback_to_handler)],
         },
-        fallbacks=[CommandHandler("cancel", cancel_conv)],
+        fallbacks=[CommandHandler("cancel", cancel_conv), CallbackQueryHandler(fallback_to_handler)],
+        allow_reentry=True,
     )
 
     edit_mc_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_edit_mc, pattern="^admin_edit_mc_")],
         states={
-            EDIT_MC_FIELD: [CallbackQueryHandler(edit_mc_field_chosen, pattern="^edit_field_")],
-            EDIT_MC_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_mc_value_save)],
+            EDIT_MC_FIELD: [
+                CallbackQueryHandler(edit_mc_field_chosen, pattern="^edit_field_"),
+                CallbackQueryHandler(fallback_to_handler),
+            ],
+            EDIT_MC_VALUE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_mc_value_save),
+                CallbackQueryHandler(fallback_to_handler),
+            ],
         },
-        fallbacks=[CommandHandler("cancel", cancel_conv)],
+        fallbacks=[CommandHandler("cancel", cancel_conv), CallbackQueryHandler(fallback_to_handler)],
+        allow_reentry=True,
     )
 
     app.add_handler(CommandHandler("start",      start))
