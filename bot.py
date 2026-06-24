@@ -286,7 +286,13 @@ async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
-    mc = context.user_data["selected_class"]
+    mc = context.user_data.get("selected_class")
+    if not mc:
+        await update.message.reply_text(
+            "⚠️ Сессия устарела. Начните заново:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📅 Записаться", callback_data="book")]])
+        )
+        return ConversationHandler.END
     username = update.message.from_user.username
     contact = f"@{username}" if username else f"ID: {update.message.from_user.id}"
     context.user_data["contact"] = contact
@@ -316,7 +322,13 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def final_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    mc = context.user_data["selected_class"]
+    mc = context.user_data.get("selected_class")
+    if not mc:
+        await query.edit_message_text(
+            "⚠️ Сессия устарела. Начните заново.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📅 Записаться", callback_data="book")]])
+        )
+        return ConversationHandler.END
     # Финальная проверка мест перед записью (защита от двойной записи)
     spots_final = get_available_spots(mc["id"])
     if spots_final <= 0:
@@ -374,7 +386,7 @@ async def final_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ADMIN_CHAT_ID,
         f"🔔 *Новая запись №{booking['id']}*\n\n"
         f"👤 {booking['name']}\n"
-        f"📱 {booking['phone']}\n"
+        f"📱 {booking.get('phone', '')}\n"
         f"🎨 {mc['title']}\n"
         f"📆 {fmt_date(mc['date'])}\n"
         f"🆔 @{query.from_user.username or 'нет username'}",
@@ -455,7 +467,7 @@ async def attendance_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
             ADMIN_CHAT_ID,
             f"✅ *Подтверждение посещения*\n\n"
             f"👤 {booking['name']} (@{booking.get('username') or 'нет'})\n"
-            f"📱 {booking['phone']}\n"
+            f"📱 {booking.get('phone', '')}\n"
             f"🎨 {booking['class_title']}\n"
             f"📆 {mc_date}",
             parse_mode="Markdown"
@@ -503,7 +515,7 @@ async def attendance_reschedule(update: Update, context: ContextTypes.DEFAULT_TY
                 ADMIN_CHAT_ID,
                 f"🔄 *Запрос на перенос*\n\n"
                 f"👤 {booking['name']} (@{booking.get('username') or 'нет'})\n"
-                f"📱 {booking['phone']}\n"
+                f"📱 {booking.get('phone', '')}\n"
                 f"🎨 {booking['class_title']}\n"
                 f"📆 {fmt_date(booking['class_date'])}\n\n"
                 f"⚠️ Нет доступных МК — свяжитесь с клиентом вручную.",
@@ -548,7 +560,7 @@ async def attendance_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ADMIN_CHAT_ID,
             f"❌ *Клиент отменил запись*\n\n"
             f"👤 {booking['name']} (@{booking.get('username') or 'нет'})\n"
-            f"📱 {booking['phone']}\n"
+            f"📱 {booking.get('phone', '')}\n"
             f"🎨 {booking['class_title']}\n"
             f"📆 {fmt_date(booking['class_date'])}",
             parse_mode="Markdown"
@@ -724,7 +736,7 @@ async def user_reschedule_confirm(update: Update, context: ContextTypes.DEFAULT_
             ADMIN_CHAT_ID,
             f"🔄 *Клиент перенёс запись*\n\n"
             f"👤 {booking['name']} (@{booking.get('username') or 'нет'})\n"
-            f"📱 {booking['phone']}\n"
+            f"📱 {booking.get('phone', '')}\n"
             f"Было: {old_title} — {fmt_date(old_date)}\n"
             f"Стало: {new_mc['title']} — {fmt_date(new_mc['date'])}",
             parse_mode="Markdown"
@@ -1027,7 +1039,7 @@ async def admin_bookings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for b in bookings:
         confirmed = "✅" if b.get("confirmed_attendance") else "⏳"
         text += (
-            f"#{b['id']} {b['name']} | {b['phone']}\n"
+            f"#{b['id']} {b['name']} | {b.get('phone', '')}\n"
             f"   🎨 {b['class_title']}\n"
             f"   📆 {fmt_date(b['class_date'])}\n"
             f"   {confirmed} Посещение подтверждено\n\n"
@@ -1293,7 +1305,7 @@ async def admin_add_mc_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return MC_TITLE
 
 async def mc_get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["new_mc"]["title"] = update.message.text
+    context.user_data.setdefault("new_mc", {})["title"] = update.message.text
     await update.message.reply_text(
         "Шаг 2/8: Введите *дату и время* в формате ДД.ММ.ГГГГ ЧЧ:ММ\nНапример: `05.08.2026 12:00`",
         parse_mode="Markdown"
