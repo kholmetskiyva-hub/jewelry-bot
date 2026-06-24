@@ -1506,6 +1506,13 @@ async def cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Отменено.", reply_markup=back_to_admin())
     return ConversationHandler.END
 
+async def fallback_to_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Универсальный fallback — завершает диалог при нажатии любой кнопки."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+    return ConversationHandler.END
+
 
 # ══════════════════════════════════════════
 #  КОМАНДЫ ПОСТОЯННОГО МЕНЮ
