@@ -18,12 +18,17 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 #  НАСТРОЙКИ
 # ══════════════════════════════════════════
 BOT_TOKEN         = "8559079528:AAEOXFQcqwMmAqi0H-b67vozQuhYsBa_mXc"
-ADMIN_CHAT_ID     = 334195585
+ADMIN_CHAT_ID     = 334195585  # главный админ (всегда)
 CHANNEL_USERNAME  = "@JJewelryNhaTrang"
 
-BOOKINGS_FILE = "bookings.json"
-CLASSES_FILE  = "classes.json"
-SETTINGS_FILE = "settings.json"
+# Папка для данных — при Railway Volume монтируется в /app/data
+# При переносе на БД — заменить функции load_json/save_json на SQL-запросы
+DATA_DIR = os.environ.get("DATA_DIR", "/app/data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+BOOKINGS_FILE = os.path.join(DATA_DIR, "bookings.json")
+CLASSES_FILE  = os.path.join(DATA_DIR, "classes.json")
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 
 DEFAULT_CLASSES = [
     {
@@ -53,6 +58,7 @@ DEFAULT_SETTINGS = {
 (CHOOSE_CLASS, GET_NAME, CONFIRM) = range(3)
 EDIT_WELCOME = 10
 EDIT_NEW_GREETING = 11
+ADD_ADMIN_ID = 12
 (BROADCAST_TARGET, BROADCAST_SELECT_CLASS, BROADCAST_TEXT) = range(20, 23)
 (MC_TITLE, MC_DATE, MC_DURATION, MC_PRICE, MC_SPOTS, MC_DESC, MC_VENUE_NAME, MC_VENUE_URL) = range(30, 38)
 (EDIT_MC_CHOOSE, EDIT_MC_FIELD, EDIT_MC_VALUE) = range(40, 43)
@@ -92,8 +98,16 @@ def get_available_spots(class_id):
     mc = next((m for m in load_classes() if m["id"] == class_id), None)
     return (mc["spots"] - booked) if mc else 0
 
+def get_admin_ids() -> list:
+    """Возвращает список всех админов: главный + добавленные"""
+    settings = load_settings()
+    admins = settings.get("admin_ids", [])
+    if ADMIN_CHAT_ID not in admins:
+        admins = [ADMIN_CHAT_ID] + admins
+    return admins
+
 def is_admin(user_id: int) -> bool:
-    return user_id == ADMIN_CHAT_ID
+    return user_id in get_admin_ids()
 
 async def is_subscribed(bot, user_id: int) -> bool:
     try:
@@ -801,6 +815,7 @@ def admin_keyboard():
         [InlineKeyboardButton("🔄 Перенести запись",         callback_data="admin_reschedule_list")],
         [InlineKeyboardButton("📣 Рассылка",                callback_data="admin_broadcast")],
         [InlineKeyboardButton("🗓 Расписание МК",           callback_data="admin_classes")],
+        [InlineKeyboardButton("👤 Добавить администратора",  callback_data="admin_add_admin")],
         [InlineKeyboardButton("🏠 Главное меню",            callback_data="main_menu")],
     ])
 
@@ -865,6 +880,140 @@ async def admin_new_greeting_save(update: Update, context: ContextTypes.DEFAULT_
         reply_markup=back_to_admin()
     )
     return ConversationHandler.END
+
+
+async def admin_add_admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало добавления нового администратора"""
+    query = update.callback_query
+    await query.answer()
+
+    # Только главный админ может добавлять других
+    if query.from_user.id != ADMIN_CHAT_ID:
+        await query.answer("⛔ Только главный администратор может добавлять других.", show_alert=True)
+        return ConversationHandler.END
+
+    settings = load_settings()
+    current_admins = settings.get("admin_ids", [])
+    admins_text = ""
+    for aid in current_admins:
+        if aid != ADMIN_CHAT_ID:
+            admins_text += f"• `{aid}`\n"
+
+    await query.edit_message_text(
+        f"👤 *Добавление администратора*\n\n"
+        f"Текущие дополнительные админы:\n"
+        f"{admins_text if admins_text else '_нет_'}\n\n"
+        f"Попросите нового администратора написать боту /start, "
+        f"затем переслать вам его сообщение или узнать Telegram ID "
+        f"через @userinfobot\n\n"
+        f"Введите *Telegram ID* нового администратора (только цифры):",
+        parse_mode="Markdown"
+    )
+    return ADD_ADMIN_ID
+
+
+async def admin_add_admin_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение нового администратора"""
+    text = update.message.text.strip()
+
+    try:
+        new_admin_id = int(text)
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Telegram ID должен состоять только из цифр. Попробуйте снова:",
+            parse_mode="Markdown"
+        )
+        return ADD_ADMIN_ID
+
+    if new_admin_id == ADMIN_CHAT_ID:
+        await update.message.reply_text(
+            "ℹ️ Этот пользователь уже является главным администратором.",
+            reply_markup=back_to_admin()
+        )
+        return ConversationHandler.END
+
+    settings = load_settings()
+    admin_ids = settings.get("admin_ids", [])
+
+    if new_admin_id in admin_ids:
+        await update.message.reply_text(
+            "ℹ️ Этот пользователь уже является администратором.",
+            reply_markup=back_to_admin()
+        )
+        return ConversationHandler.END
+
+    admin_ids.append(new_admin_id)
+    settings["admin_ids"] = admin_ids
+    save_settings(settings)
+
+    # Уведомляем нового админа
+    try:
+        await context.bot.send_message(
+            new_admin_id,
+            "🎉 Вам выданы права администратора!\n\n"
+            "Напишите /admin чтобы открыть панель управления."
+        )
+        notified = "✅ Пользователь уведомлён."
+    except Exception:
+        notified = "⚠️ Не удалось уведомить — пользователь должен написать боту /start."
+
+    # Обновляем меню для нового админа
+    try:
+        from telegram import BotCommandScopeChat
+        await context.bot.set_my_commands([
+            ("book",       "📅 Записаться на МК"),
+            ("mybookings", "📋 Мои записи"),
+            ("move",       "🔄 Перенести запись"),
+            ("cancel",     "❌ Отменить запись"),
+            ("admin",      "⚙️ Админ-панель"),
+        ], scope=BotCommandScopeChat(chat_id=new_admin_id))
+    except Exception:
+        pass
+
+    await update.message.reply_text(
+        f"✅ *Администратор добавлен!*\n\n"
+        f"ID: `{new_admin_id}`\n"
+        f"{notified}",
+        reply_markup=back_to_admin(),
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+
+async def admin_remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаление администратора (через callback admin_remove_ADMINID)"""
+    query = update.callback_query
+    await query.answer()
+
+    if query.from_user.id != ADMIN_CHAT_ID:
+        await query.answer("⛔ Только главный администратор.", show_alert=True)
+        return
+
+    rm_id = int(query.data.split("_")[2])
+    settings = load_settings()
+    admin_ids = settings.get("admin_ids", [])
+    if rm_id in admin_ids:
+        admin_ids.remove(rm_id)
+        settings["admin_ids"] = admin_ids
+        save_settings(settings)
+
+    try:
+        from telegram import BotCommandScopeChat
+        await context.bot.set_my_commands([
+            ("book",       "📅 Записаться на МК"),
+            ("mybookings", "📋 Мои записи"),
+            ("move",       "🔄 Перенести запись"),
+            ("cancel",     "❌ Отменить запись"),
+        ], scope=BotCommandScopeChat(chat_id=rm_id))
+        await context.bot.send_message(rm_id, "ℹ️ Ваши права администратора отозваны.")
+    except Exception:
+        pass
+
+    await query.edit_message_text(
+        f"✅ Администратор `{rm_id}` удалён.",
+        reply_markup=back_to_admin(),
+        parse_mode="Markdown"
+    )
 
 
 async def admin_bookings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1466,17 +1615,22 @@ def main():
             ("cancel",     "❌ Отменить запись"),
         ], scope=BotCommandScopeDefault())
 
-        # Расширенное меню для админа
-        try:
-            await application.bot.set_my_commands([
-                ("book",       "📅 Записаться на МК"),
-                ("mybookings", "📋 Мои записи"),
-                ("move",       "🔄 Перенести запись"),
-                ("cancel",     "❌ Отменить запись"),
-                ("admin",      "⚙️ Админ-панель"),
-            ], scope=BotCommandScopeChat(chat_id=ADMIN_CHAT_ID))
-        except Exception as e:
-            logger.warning(f"Не удалось установить меню для админа: {e}")
+        # Расширенное меню для всех админов
+        admin_commands = [
+            ("book",       "📅 Записаться на МК"),
+            ("mybookings", "📋 Мои записи"),
+            ("move",       "🔄 Перенести запись"),
+            ("cancel",     "❌ Отменить запись"),
+            ("admin",      "⚙️ Админ-панель"),
+        ]
+        for admin_id in get_admin_ids():
+            try:
+                await application.bot.set_my_commands(
+                    admin_commands,
+                    scope=BotCommandScopeChat(chat_id=admin_id)
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось установить меню для админа {admin_id}: {e}")
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
@@ -1506,6 +1660,12 @@ def main():
     new_greeting_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_new_greeting_start, pattern="^admin_new_greeting$")],
         states={EDIT_NEW_GREETING: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_new_greeting_save)]},
+        fallbacks=[CommandHandler("cancel", cancel_conv)],
+    )
+
+    add_admin_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_add_admin_start, pattern="^admin_add_admin$")],
+        states={ADD_ADMIN_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_admin_save)]},
         fallbacks=[CommandHandler("cancel", cancel_conv)],
     )
 
@@ -1551,6 +1711,8 @@ def main():
     app.add_handler(client_conv)
     app.add_handler(welcome_conv)
     app.add_handler(new_greeting_conv)
+    app.add_handler(add_admin_conv)
+    app.add_handler(CallbackQueryHandler(admin_remove_admin, pattern="^admin_remove_"))
     app.add_handler(broadcast_conv)
     app.add_handler(add_mc_conv)
     app.add_handler(edit_mc_conv)
