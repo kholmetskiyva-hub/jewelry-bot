@@ -1271,10 +1271,144 @@ async def cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════
+#  КОМАНДЫ ПОСТОЯННОГО МЕНЮ
+# ══════════════════════════════════════════
+async def cmd_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /book — Записаться на МК"""
+    settings = load_settings()
+    classes = load_classes()
+    keyboard = []
+    text = "📅 *Доступные мастер-классы:*\n\n"
+    found = False
+    for mc in classes:
+        try:
+            date = datetime.strptime(mc["date"], "%Y-%m-%d %H:%M")
+        except Exception:
+            continue
+        if date < datetime.now():
+            continue
+        spots = get_available_spots(mc["id"])
+        if spots <= 0:
+            continue
+        found = True
+        venue_name = mc.get("venue_name", "")
+        venue_line = f"📍 {venue_name}\n" if venue_name else ""
+        text += (
+            f"*{mc['title']}*\n"
+            f"📆 {fmt_date(mc['date'])}\n"
+            f"{venue_line}"
+            f"⏱ {mc['duration']} | 💰 {mc['price']}\n"
+            f"✅ Мест: {spots}\n\n"
+        )
+        keyboard.append([InlineKeyboardButton(
+            mc["title"][:40], callback_data=f"select_{mc['id']}"
+        )])
+    if not found:
+        text = "😔 Пока нет доступных мастер-классов. Следите за обновлениями!"
+    keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")])
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+
+async def cmd_mybookings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /mybookings — Мои записи"""
+    user_id = update.effective_user.id
+    bookings = [b for b in load_bookings() if b["user_id"] == user_id and b["status"] == "confirmed"]
+    keyboard = [[InlineKeyboardButton("📅 Записаться на МК", callback_data="book")]]
+    if not bookings:
+        await update.message.reply_text(
+            "У вас пока нет активных записей.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    text = "📋 *Ваши записи:*\n\n"
+    for b in bookings:
+        venue_name = b.get("venue_name", "")
+        venue_url  = b.get("venue_url", "")
+        venue_line = f"📍 [{venue_name}]({venue_url})\n" if venue_name and venue_url else (f"📍 {venue_name}\n" if venue_name else "")
+        text += f"🎨 {b['class_title']}\n📆 {fmt_date(b['class_date'])}\n{venue_line}\n"
+        keyboard.insert(0, [
+            InlineKeyboardButton("🔄 Перенести", callback_data=f"user_move_{b['id']}"),
+            InlineKeyboardButton("❌ Отменить",  callback_data=f"user_cancel_{b['id']}"),
+        ])
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+
+async def cmd_move(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /move — Перенести запись"""
+    user_id = update.effective_user.id
+    bookings = [b for b in load_bookings() if b["user_id"] == user_id and b["status"] == "confirmed"]
+    if not bookings:
+        await update.message.reply_text(
+            "У вас нет активных записей для переноса.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("📅 Записаться на МК", callback_data="book")
+            ]])
+        )
+        return
+    keyboard = [
+        [InlineKeyboardButton(
+            f"🔄 {b['class_title'][:35]} — {fmt_date(b['class_date'])}",
+            callback_data=f"user_move_{b['id']}"
+        )]
+        for b in bookings
+    ]
+    keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")])
+    await update.message.reply_text(
+        "🔄 *Какую запись перенести?*",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /cancel — Отменить запись"""
+    user_id = update.effective_user.id
+    bookings = [b for b in load_bookings() if b["user_id"] == user_id and b["status"] == "confirmed"]
+    if not bookings:
+        await update.message.reply_text(
+            "У вас нет активных записей для отмены.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("📅 Записаться на МК", callback_data="book")
+            ]])
+        )
+        return
+    keyboard = [
+        [InlineKeyboardButton(
+            f"❌ {b['class_title'][:35]} — {fmt_date(b['class_date'])}",
+            callback_data=f"user_cancel_{b['id']}"
+        )]
+        for b in bookings
+    ]
+    keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")])
+    await update.message.reply_text(
+        "❌ *Какую запись отменить?*",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+
+# ══════════════════════════════════════════
 #  ЗАПУСК
 # ══════════════════════════════════════════
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    async def post_init(application: Application) -> None:
+        """Устанавливает постоянное меню команд в Telegram"""
+        await application.bot.set_my_commands([
+            ("book",       "📅 Записаться на МК"),
+            ("mybookings", "📋 Мои записи"),
+            ("move",       "🔄 Перенести запись"),
+            ("cancel",     "❌ Отменить запись"),
+        ])
+
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     client_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(show_classes, pattern="^book$")],
@@ -1332,8 +1466,12 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel_conv)],
     )
 
-    app.add_handler(CommandHandler("start",  start))
-    app.add_handler(CommandHandler("admin",  admin_panel_cmd))
+    app.add_handler(CommandHandler("start",      start))
+    app.add_handler(CommandHandler("admin",      admin_panel_cmd))
+    app.add_handler(CommandHandler("book",       cmd_book))
+    app.add_handler(CommandHandler("mybookings", cmd_mybookings))
+    app.add_handler(CommandHandler("move",       cmd_move))
+    app.add_handler(CommandHandler("cancel",     cmd_cancel))
     app.add_handler(client_conv)
     app.add_handler(welcome_conv)
     app.add_handler(broadcast_conv)
