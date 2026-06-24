@@ -1,12 +1,6 @@
 """
 Telegram-бот для записи на мастер-классы по созданию украшений
-Версия 2.0 — с полной админ-панелью
-
-Установка:
-    pip install python-telegram-bot==20.7 apscheduler
-
-Запуск:
-    python masterclass_bot_v2.py
+Версия 3.0 — напоминания за 24ч и 1ч с подтверждением, адрес кафе
 """
 
 import logging
@@ -21,21 +15,16 @@ from telegram.ext import (
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ══════════════════════════════════════════
-#  НАСТРОЙКИ — заполните перед запуском
+#  НАСТРОЙКИ
 # ══════════════════════════════════════════
-BOT_TOKEN    = "8559079528:AAEOXFQcqwMmAqi0H-b67vozQuhYsBa_mXc"   # Получить у @BotFather
-ADMIN_CHAT_ID = 334195585          # Ваш Telegram ID (узнать у @userinfobot)
-CHANNEL_USERNAME = "@JJewelryNhaTrang"  # Канал для проверки подписки
+BOT_TOKEN         = "8559079528:AAEOXFQcqwMmAqi0H-b67vozQuhYsBa_mXc"
+ADMIN_CHAT_ID     = 334195585
+CHANNEL_USERNAME  = "@JJewelryNhaTrang"
 
-# Файлы хранения данных (создаются автоматически)
-BOOKINGS_FILE  = "bookings.json"
-CLASSES_FILE   = "classes.json"
-SETTINGS_FILE  = "settings.json"
+BOOKINGS_FILE = "bookings.json"
+CLASSES_FILE  = "classes.json"
+SETTINGS_FILE = "settings.json"
 
-# ══════════════════════════════════════════
-#  НАЧАЛЬНЫЕ МАСТЕР-КЛАССЫ
-#  (загружаются только при первом запуске)
-# ══════════════════════════════════════════
 DEFAULT_CLASSES = [
     {
         "id": 1,
@@ -44,25 +33,9 @@ DEFAULT_CLASSES = [
         "duration": "3 часа",
         "price": "2500 ₽",
         "spots": 8,
-        "description": "Создадим нежные серьги с цветочным мотивом. Все материалы включены."
-    },
-    {
-        "id": 2,
-        "title": "💎 Кольца из серебряной проволоки",
-        "date": "2026-07-12 14:00",
-        "duration": "2.5 часа",
-        "price": "3000 ₽",
-        "spots": 6,
-        "description": "Техника wire wrapping. Научитесь делать изящные кольца с камнями."
-    },
-    {
-        "id": 3,
-        "title": "🌿 Кулоны с природными элементами",
-        "date": "2026-07-19 11:00",
-        "duration": "3 часа",
-        "price": "2800 ₽",
-        "spots": 10,
-        "description": "Создадим кулоны с сухоцветами и смолой. Уникальные украшения из природы."
+        "description": "Создадим нежные серьги с цветочным мотивом. Все материалы включены.",
+        "venue_name": "Кафе Example",
+        "venue_url": "https://maps.google.com/?q=Nha+Trang"
     },
 ]
 
@@ -77,19 +50,10 @@ DEFAULT_SETTINGS = {
 # ══════════════════════════════════════════
 #  СОСТОЯНИЯ ДИАЛОГОВ
 # ══════════════════════════════════════════
-# Запись клиента
-(CHOOSE_CLASS, GET_NAME, GET_PHONE, CONFIRM) = range(4)
-
-# Админ: приветствие
+(CHOOSE_CLASS, GET_NAME, CONFIRM) = range(3)
 EDIT_WELCOME = 10
-
-# Админ: рассылка
 (BROADCAST_TARGET, BROADCAST_SELECT_CLASS, BROADCAST_TEXT) = range(20, 23)
-
-# Админ: новый мастер-класс
-(MC_TITLE, MC_DATE, MC_DURATION, MC_PRICE, MC_SPOTS, MC_DESC) = range(30, 36)
-
-# Админ: редактирование поля МК
+(MC_TITLE, MC_DATE, MC_DURATION, MC_PRICE, MC_SPOTS, MC_DESC, MC_VENUE_NAME, MC_VENUE_URL) = range(30, 38)
 (EDIT_MC_CHOOSE, EDIT_MC_FIELD, EDIT_MC_VALUE) = range(40, 43)
 
 logging.basicConfig(
@@ -131,12 +95,10 @@ def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_CHAT_ID
 
 async def is_subscribed(bot, user_id: int) -> bool:
-    """Проверяет подписку пользователя на канал CHANNEL_USERNAME."""
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
         return member.status in ("member", "administrator", "creator")
     except Exception:
-        # Если бот не добавлен в канал как администратор — пропускаем проверку
         return True
 
 def fmt_date(date_str: str) -> str:
@@ -162,7 +124,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     if is_admin(update.effective_user.id):
         keyboard.append([InlineKeyboardButton("⚙️ Админ-панель", callback_data="admin_panel")])
-
     await update.message.reply_text(
         settings["welcome_message"],
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -189,7 +150,6 @@ async def show_classes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # ── Проверка подписки на канал ──
     if not await is_subscribed(context.bot, query.from_user.id):
         keyboard = [
             [InlineKeyboardButton("📢 Подписаться на канал", url=f"https://t.me/JJewelryNhaTrang")],
@@ -198,9 +158,7 @@ async def show_classes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await query.edit_message_text(
             "🔒 *Доступ только для подписчиков*\n\n"
-            "Чтобы записаться на мастер-класс, необходимо подписаться на наш канал:\n"
-            "📢 @JJewelryNhaTrang\n\n"
-            "После подписки нажмите кнопку «Я подписался».",
+            "Подпишитесь на канал @JJewelryNhaTrang и нажмите «Я подписался».",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
@@ -217,19 +175,23 @@ async def show_classes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
         if date < datetime.now():
             continue
-        found = True
         spots = get_available_spots(mc["id"])
-        spots_text = f"✅ Мест: {spots}" if spots > 0 else "❌ Мест нет"
+        # Скрываем МК если мест нет
+        if spots <= 0:
+            continue
+        found = True
+        venue_name = mc.get("venue_name", "")
+        venue_line = f"📍 {venue_name}\n" if venue_name else ""
         text += (
             f"*{mc['title']}*\n"
             f"📆 {fmt_date(mc['date'])}\n"
+            f"{venue_line}"
             f"⏱ {mc['duration']} | 💰 {mc['price']}\n"
-            f"{spots_text}\n\n"
+            f"✅ Мест: {spots}\n\n"
         )
-        if spots > 0:
-            keyboard.append([InlineKeyboardButton(
-                mc["title"][:40], callback_data=f"select_{mc['id']}"
-            )])
+        keyboard.append([InlineKeyboardButton(
+            mc["title"][:40], callback_data=f"select_{mc['id']}"
+        )])
     if not found:
         text = "😔 Пока нет доступных мастер-классов. Следите за обновлениями!"
     keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")])
@@ -245,14 +207,27 @@ async def select_class(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not mc:
         await query.edit_message_text("Мастер-класс не найден.")
         return ConversationHandler.END
+    # Проверяем актуальное кол-во мест
+    spots_now = get_available_spots(class_id)
+    if spots_now <= 0:
+        await query.edit_message_text(
+            f"😔 К сожалению, все места на *{mc['title']}* уже заняты.\n\n"
+            f"Выберите другой мастер-класс:",
+            parse_mode="Markdown"
+        )
+        return await show_classes(update, context)
     context.user_data["selected_class"] = mc
     keyboard = [
-        [InlineKeyboardButton("✅ Записаться", callback_data="confirm_class")],
+        [InlineKeyboardButton(f"✅ Записаться ({spots_now} мест)", callback_data="confirm_class")],
         [InlineKeyboardButton("◀️ Назад", callback_data="book")],
     ]
+    venue_name = mc.get("venue_name", "")
+    venue_url  = mc.get("venue_url", "")
+    venue_line = f"📍 [{venue_name}]({venue_url})\n" if venue_name and venue_url else (f"📍 {venue_name}\n" if venue_name else "")
     await query.edit_message_text(
         f"*{mc['title']}*\n\n"
         f"📆 {fmt_date(mc['date'])}\n"
+        f"{venue_line}"
         f"⏱ Длительность: {mc['duration']}\n"
         f"💰 Стоимость: {mc['price']}\n\n"
         f"ℹ️ {mc['description']}\n\n"
@@ -265,59 +240,93 @@ async def select_class(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Введите ваше *имя и фамилию:*", parse_mode="Markdown")
+    await query.edit_message_text("Введите ваше *имя:*", parse_mode="Markdown")
     return GET_NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
-    await update.message.reply_text("📱 Введите ваш *номер телефона:*", parse_mode="Markdown")
-    return GET_PHONE
-
-async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["phone"] = update.message.text
     mc = context.user_data["selected_class"]
+    username = update.message.from_user.username
+    contact = f"@{username}" if username else f"ID: {update.message.from_user.id}"
+    context.user_data["contact"] = contact
     keyboard = [
         [InlineKeyboardButton("✅ Подтвердить запись", callback_data="final_confirm")],
         [InlineKeyboardButton("❌ Отмена", callback_data="main_menu")],
     ]
+    venue_name = mc.get("venue_name", "")
+    venue_url  = mc.get("venue_url", "")
+    venue_line = f"📍 [{venue_name}]({venue_url})\n" if venue_name and venue_url else (f"📍 {venue_name}\n" if venue_name else "")
     await update.message.reply_text(
         f"📋 *Проверьте данные:*\n\n"
         f"👤 Имя: {context.user_data['name']}\n"
-        f"📱 Телефон: {context.user_data['phone']}\n"
+        f"📲 Контакт: {contact}\n"
         f"🎨 МК: {mc['title']}\n"
         f"📆 {fmt_date(mc['date'])}\n"
-        f"💰 {mc['price']}",
+        f"{venue_line}"
+        f"💰 {mc['price']}\n\n"
+        f"Это ваш Telegram — всё верно?",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
     return CONFIRM
 
+
+
 async def final_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     mc = context.user_data["selected_class"]
+    # Финальная проверка мест перед записью (защита от двойной записи)
+    spots_final = get_available_spots(mc["id"])
+    if spots_final <= 0:
+        await query.edit_message_text(
+            f"😔 К сожалению, места на *{mc['title']}* только что закончились.\n\n"
+            f"Выберите другой мастер-класс:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("📅 Выбрать другой МК", callback_data="book")
+            ]]),
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
     bookings = load_bookings()
+    contact = context.user_data.get("contact", f"@{query.from_user.username}" if query.from_user.username else f"ID:{query.from_user.id}")
     booking = {
         "id": len(bookings) + 1,
         "user_id": query.from_user.id,
         "username": query.from_user.username or "",
         "name": context.user_data["name"],
-        "phone": context.user_data["phone"],
+        "phone": contact,
         "class_id": mc["id"],
         "class_title": mc["title"],
         "class_date": mc["date"],
+        "venue_name": mc.get("venue_name", ""),
+        "venue_url": mc.get("venue_url", ""),
         "booked_at": datetime.now().isoformat(),
-        "status": "confirmed"
+        "status": "confirmed",
+        "reminder_24h_sent": False,
+        "reminder_1h_sent": False,
+        "confirmed_attendance": False,
     }
     bookings.append(booking)
     save_bookings(bookings)
 
+    venue_name = mc.get("venue_name", "")
+    venue_url  = mc.get("venue_url", "")
+    venue_line = f"📍 [{venue_name}]({venue_url})\n" if venue_name and venue_url else (f"📍 {venue_name}\n" if venue_name else "")
+
+    post_booking_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Записаться ещё на МК", callback_data="book")],
+        [InlineKeyboardButton("🔄 Перенести запись", callback_data=f"user_move_{booking['id']}")],
+        [InlineKeyboardButton("❌ Отменить запись", callback_data=f"user_cancel_{booking['id']}")],
+    ])
     await query.edit_message_text(
         f"🎉 *Вы успешно записаны!*\n\n"
         f"🎨 {mc['title']}\n"
         f"📆 {fmt_date(mc['date'])}\n"
+        f"{venue_line}"
         f"💰 {mc['price']}\n\n"
-        f"За день до мастер-класса пришлю напоминание. До встречи! 💎",
+        f"За сутки пришлю напоминание. До встречи! 💎",
+        reply_markup=post_booking_keyboard,
         parse_mode="Markdown"
     )
     await context.bot.send_message(
@@ -343,7 +352,14 @@ async def my_bookings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = "📋 *Ваши записи:*\n\n"
     for b in bookings:
-        text += f"🎨 {b['class_title']}\n📆 {fmt_date(b['class_date'])}\n\n"
+        venue_name = b.get("venue_name", "")
+        venue_url  = b.get("venue_url", "")
+        venue_line = f"📍 [{venue_name}]({venue_url})\n" if venue_name and venue_url else (f"📍 {venue_name}\n" if venue_name else "")
+        text += f"🎨 {b['class_title']}\n📆 {fmt_date(b['class_date'])}\n{venue_line}\n"
+        keyboard.insert(-1, [
+            InlineKeyboardButton("🔄 Перенести", callback_data=f"user_move_{b['id']}"),
+            InlineKeyboardButton("❌ Отменить", callback_data=f"user_cancel_{b['id']}"),
+        ])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -355,10 +371,395 @@ async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Этот бот позволяет записаться на мастер-классы по созданию украшений.\n\n"
         "📅 *Записаться* — выбрать мастер-класс и оставить заявку\n"
         "📋 *Мои записи* — посмотреть ваши бронирования\n\n"
-        "По вопросам: @ваш_username",
+        "По вопросам: @вашusername",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
+
+
+# ══════════════════════════════════════════
+#  ПОДТВЕРЖДЕНИЕ ПОСЕЩЕНИЯ (ответ на напоминание)
+# ══════════════════════════════════════════
+async def attendance_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пользователь нажал «Подтверждаю ✅»"""
+    query = update.callback_query
+    await query.answer()
+    booking_id = int(query.data.split("_")[2])
+    bookings = load_bookings()
+    booking = next((b for b in bookings if b["id"] == booking_id), None)
+    if not booking:
+        await query.edit_message_text("Запись не найдена.")
+        return
+
+    booking["confirmed_attendance"] = True
+    save_bookings(bookings)
+
+    mc_date = fmt_date(booking["class_date"])
+    venue_name = booking.get("venue_name", "")
+    venue_url  = booking.get("venue_url", "")
+    venue_line = f"📍 [{venue_name}]({venue_url})\n" if venue_name and venue_url else (f"📍 {venue_name}\n" if venue_name else "")
+
+    await query.edit_message_text(
+        f"✅ *Отлично! Ждём вас!*\n\n"
+        f"🎨 {booking['class_title']}\n"
+        f"📆 {mc_date}\n"
+        f"{venue_line}"
+        f"\nДо встречи! 💎",
+        parse_mode="Markdown"
+    )
+
+    # Уведомляем админа
+    try:
+        await context.bot.send_message(
+            ADMIN_CHAT_ID,
+            f"✅ *Подтверждение посещения*\n\n"
+            f"👤 {booking['name']} (@{booking.get('username') or 'нет'})\n"
+            f"📱 {booking['phone']}\n"
+            f"🎨 {booking['class_title']}\n"
+            f"📆 {mc_date}",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка уведомления админа: {e}")
+
+async def attendance_reschedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пользователь нажал «Перенести 🔄»"""
+    query = update.callback_query
+    await query.answer()
+    booking_id = int(query.data.split("_")[2])
+    bookings = load_bookings()
+    booking = next((b for b in bookings if b["id"] == booking_id), None)
+    if not booking:
+        await query.edit_message_text("Запись не найдена.")
+        return
+
+    # Показываем доступные МК для переноса
+    classes = load_classes()
+    keyboard = []
+    for mc in classes:
+        try:
+            date = datetime.strptime(mc["date"], "%Y-%m-%d %H:%M")
+        except Exception:
+            continue
+        if date < datetime.now() or mc["id"] == booking["class_id"]:
+            continue
+        spots = get_available_spots(mc["id"])
+        if spots > 0:
+            keyboard.append([InlineKeyboardButton(
+                f"{mc['title'][:30]} — {fmt_date(mc['date'])}",
+                callback_data=f"user_reschedule_{booking_id}_{mc['id']}"
+            )])
+
+    if not keyboard:
+        await query.edit_message_text(
+            "😔 К сожалению, сейчас нет доступных МК для переноса.\n"
+            "Свяжитесь с организатором.",
+            parse_mode="Markdown"
+        )
+        # Уведомляем админа
+        try:
+            await context.bot.send_message(
+                ADMIN_CHAT_ID,
+                f"🔄 *Запрос на перенос*\n\n"
+                f"👤 {booking['name']} (@{booking.get('username') or 'нет'})\n"
+                f"📱 {booking['phone']}\n"
+                f"🎨 {booking['class_title']}\n"
+                f"📆 {fmt_date(booking['class_date'])}\n\n"
+                f"⚠️ Нет доступных МК — свяжитесь с клиентом вручную.",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+        return
+
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="main_menu")])
+    await query.edit_message_text(
+        "🔄 *Выберите мастер-класс для переноса:*",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+async def attendance_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пользователь нажал «Отмена ❌» в напоминании"""
+    query = update.callback_query
+    await query.answer()
+    booking_id = int(query.data.split("_")[2])
+    bookings = load_bookings()
+    booking = next((b for b in bookings if b["id"] == booking_id), None)
+    if not booking:
+        await query.edit_message_text("Запись не найдена.")
+        return
+
+    booking["status"] = "cancelled"
+    save_bookings(bookings)
+
+    await query.edit_message_text(
+        f"❌ *Ваша запись отменена.*\n\n"
+        f"🎨 {booking['class_title']}\n"
+        f"📆 {fmt_date(booking['class_date'])}\n\n"
+        f"Будем рады видеть вас на следующих мастер-классах! 💎",
+        parse_mode="Markdown"
+    )
+
+    # Уведомляем админа
+    try:
+        await context.bot.send_message(
+            ADMIN_CHAT_ID,
+            f"❌ *Клиент отменил запись*\n\n"
+            f"👤 {booking['name']} (@{booking.get('username') or 'нет'})\n"
+            f"📱 {booking['phone']}\n"
+            f"🎨 {booking['class_title']}\n"
+            f"📆 {fmt_date(booking['class_date'])}",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка уведомления админа: {e}")
+
+
+async def user_move_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Перенос записи — вызывается кнопкой после успешной записи"""
+    query = update.callback_query
+    await query.answer()
+    booking_id = int(query.data.split("_")[2])
+    bookings = load_bookings()
+    booking = next((b for b in bookings if b["id"] == booking_id), None)
+    if not booking or booking["status"] != "confirmed":
+        await query.edit_message_text("Запись не найдена или уже отменена.")
+        return
+
+    classes = load_classes()
+    keyboard = []
+    for mc in classes:
+        try:
+            date = datetime.strptime(mc["date"], "%Y-%m-%d %H:%M")
+        except Exception:
+            continue
+        if date < datetime.now() or mc["id"] == booking["class_id"]:
+            continue
+        if get_available_spots(mc["id"]) > 0:
+            keyboard.append([InlineKeyboardButton(
+                f"{mc['title'][:30]} — {fmt_date(mc['date'])}",
+                callback_data=f"user_reschedule_{booking_id}_{mc['id']}"
+            )])
+
+    if not keyboard:
+        await query.edit_message_text(
+            "😔 Сейчас нет доступных МК для переноса.\n"
+            "Свяжитесь с организатором.",
+            parse_mode="Markdown"
+        )
+        try:
+            await context.bot.send_message(
+                ADMIN_CHAT_ID,
+                f"🔄 *Запрос на перенос*\n\n"
+                f"👤 {booking['name']} ({booking.get('phone','')})\n"
+                f"🎨 {booking['class_title']}\n"
+                f"📆 {fmt_date(booking['class_date'])}\n\n"
+                f"⚠️ Нет доступных МК — свяжитесь с клиентом.",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+        return
+
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="main_menu")])
+    await query.edit_message_text(
+        "🔄 *Выберите мастер-класс для переноса:*",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+
+async def user_cancel_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена записи — вызывается кнопкой после успешной записи"""
+    query = update.callback_query
+    await query.answer()
+    booking_id = int(query.data.split("_")[2])
+    bookings = load_bookings()
+    booking = next((b for b in bookings if b["id"] == booking_id), None)
+    if not booking or booking["status"] != "confirmed":
+        await query.edit_message_text("Запись не найдена или уже отменена.")
+        return
+
+    # Показываем подтверждение отмены
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Да, отменить", callback_data=f"user_cancel_confirm_{booking_id}")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="my_bookings")],
+    ])
+    await query.edit_message_text(
+        f"❓ Вы уверены, что хотите отменить запись?\n\n"
+        f"🎨 {booking['class_title']}\n"
+        f"📆 {fmt_date(booking['class_date'])}",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+
+async def user_cancel_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение отмены записи пользователем"""
+    query = update.callback_query
+    await query.answer()
+    booking_id = int(query.data.split("_")[3])
+    bookings = load_bookings()
+    booking = next((b for b in bookings if b["id"] == booking_id), None)
+    if not booking:
+        await query.edit_message_text("Запись не найдена.")
+        return
+
+    booking["status"] = "cancelled"
+    save_bookings(bookings)
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Записаться на другой МК", callback_data="book")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")],
+    ])
+    await query.edit_message_text(
+        f"❌ *Запись отменена.*\n\n"
+        f"🎨 {booking['class_title']}\n"
+        f"📆 {fmt_date(booking['class_date'])}\n\n"
+        f"Будем рады видеть вас на следующих мастер-классах! 💎",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+    try:
+        await context.bot.send_message(
+            ADMIN_CHAT_ID,
+            f"❌ *Клиент отменил запись*\n\n"
+            f"👤 {booking['name']} ({booking.get('phone','')})\n"
+            f"🎨 {booking['class_title']}\n"
+            f"📆 {fmt_date(booking['class_date'])}",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка уведомления админа: {e}")
+
+
+async def user_reschedule_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пользователь выбрал новый МК для переноса"""
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split("_")
+    booking_id  = int(parts[2])
+    new_class_id = int(parts[3])
+
+    bookings = load_bookings()
+    booking = next((b for b in bookings if b["id"] == booking_id), None)
+    classes = load_classes()
+    new_mc = next((m for m in classes if m["id"] == new_class_id), None)
+
+    if not booking or not new_mc:
+        await query.edit_message_text("Ошибка. Попробуйте снова.")
+        return
+
+    old_title = booking["class_title"]
+    old_date  = booking["class_date"]
+
+    booking["class_id"]    = new_mc["id"]
+    booking["class_title"] = new_mc["title"]
+    booking["class_date"]  = new_mc["date"]
+    booking["venue_name"]  = new_mc.get("venue_name", "")
+    booking["venue_url"]   = new_mc.get("venue_url", "")
+    booking["confirmed_attendance"] = False
+    booking["reminder_24h_sent"]    = False
+    booking["reminder_1h_sent"]     = False
+    save_bookings(bookings)
+
+    venue_name = new_mc.get("venue_name", "")
+    venue_url  = new_mc.get("venue_url", "")
+    venue_line = f"📍 [{venue_name}]({venue_url})\n" if venue_name and venue_url else ""
+
+    await query.edit_message_text(
+        f"✅ *Запись перенесена!*\n\n"
+        f"Было: {old_title} — {fmt_date(old_date)}\n"
+        f"Стало: {new_mc['title']} — {fmt_date(new_mc['date'])}\n"
+        f"{venue_line}\n"
+        f"Ждём вас! 💎",
+        parse_mode="Markdown"
+    )
+
+    # Уведомляем админа
+    try:
+        await context.bot.send_message(
+            ADMIN_CHAT_ID,
+            f"🔄 *Клиент перенёс запись*\n\n"
+            f"👤 {booking['name']} (@{booking.get('username') or 'нет'})\n"
+            f"📱 {booking['phone']}\n"
+            f"Было: {old_title} — {fmt_date(old_date)}\n"
+            f"Стало: {new_mc['title']} — {fmt_date(new_mc['date'])}",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка уведомления админа: {e}")
+
+
+# ══════════════════════════════════════════
+#  НАПОМИНАНИЯ (запускаются каждые 30 минут)
+# ══════════════════════════════════════════
+def reminder_keyboard(booking_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура подтверждения — используется в обоих напоминаниях"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Подтверждаю", callback_data=f"attend_confirm_{booking_id}")],
+        [InlineKeyboardButton("🔄 Перенести на другой МК", callback_data=f"attend_reschedule_{booking_id}")],
+        [InlineKeyboardButton("❌ Отмена записи", callback_data=f"attend_cancel_{booking_id}")],
+    ])
+
+async def send_reminders(app):
+    bookings = load_bookings()
+    changed = False
+
+    for b in bookings:
+        if b["status"] != "confirmed":
+            continue
+        try:
+            class_date = datetime.strptime(b["class_date"], "%Y-%m-%d %H:%M")
+        except Exception:
+            continue
+
+        diff_hours = (class_date - datetime.now()).total_seconds() / 3600
+        venue_name = b.get("venue_name", "")
+        venue_url  = b.get("venue_url", "")
+        venue_line = f"📍 [{venue_name}]({venue_url})\n" if venue_name and venue_url else (f"📍 {venue_name}\n" if venue_name else "")
+
+        # ── Напоминание за 24 часа ──────────────────────────────
+        if 23 <= diff_hours <= 25 and not b.get("reminder_24h_sent"):
+            try:
+                await app.bot.send_message(
+                    b["user_id"],
+                    f"⏰ *Напоминание — завтра ваш мастер-класс!*\n\n"
+                    f"🎨 {b['class_title']}\n"
+                    f"📆 {fmt_date(b['class_date'])}\n"
+                    f"{venue_line}\n"
+                    f"Пожалуйста, подтвердите участие:",
+                    reply_markup=reminder_keyboard(b["id"]),
+                    parse_mode="Markdown"
+                )
+                b["reminder_24h_sent"] = True
+                changed = True
+                logger.info(f"Напоминание 24ч отправлено: {b['name']}")
+            except Exception as e:
+                logger.error(f"Ошибка напоминания 24ч: {e}")
+
+        # ── Напоминание за 1 час ────────────────────────────────
+        if 0.5 <= diff_hours <= 1.5 and not b.get("reminder_1h_sent"):
+            try:
+                await app.bot.send_message(
+                    b["user_id"],
+                    f"🔔 *Через час начинается мастер-класс!*\n\n"
+                    f"🎨 {b['class_title']}\n"
+                    f"📆 {fmt_date(b['class_date'])}\n"
+                    f"{venue_line}\n"
+                    f"Выезжайте заранее! Подтвердите участие:",
+                    reply_markup=reminder_keyboard(b["id"]),
+                    parse_mode="Markdown"
+                )
+                b["reminder_1h_sent"] = True
+                changed = True
+                logger.info(f"Напоминание 1ч отправлено: {b['name']}")
+            except Exception as e:
+                logger.error(f"Ошибка напоминания 1ч: {e}")
+
+    if changed:
+        save_bookings(bookings)
 
 
 # ══════════════════════════════════════════
@@ -393,16 +794,12 @@ def back_to_admin():
     return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад в панель", callback_data="admin_panel")]])
 
 
-# ── Приветственное сообщение ──────────────
 async def admin_welcome_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not is_admin(query.from_user.id):
-        return
     settings = load_settings()
     await query.edit_message_text(
-        f"✏️ *Текущее приветствие:*\n\n{settings['welcome_message']}\n\n"
-        "Отправьте новый текст приветствия (или /cancel для отмены):",
+        f"✏️ *Текущее приветствие:*\n\n{settings['welcome_message']}\n\nОтправьте новый текст:",
         parse_mode="Markdown"
     )
     return EDIT_WELCOME
@@ -411,42 +808,34 @@ async def admin_welcome_save(update: Update, context: ContextTypes.DEFAULT_TYPE)
     settings = load_settings()
     settings["welcome_message"] = update.message.text
     save_settings(settings)
-    await update.message.reply_text(
-        "✅ Приветствие обновлено!",
-        reply_markup=back_to_admin()
-    )
+    await update.message.reply_text("✅ Приветствие обновлено!", reply_markup=back_to_admin())
     return ConversationHandler.END
 
 
-# ── Все записи ────────────────────────────
 async def admin_bookings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not is_admin(query.from_user.id):
-        return
     bookings = [b for b in load_bookings() if b["status"] == "confirmed"]
     if not bookings:
         await query.edit_message_text("Нет активных записей.", reply_markup=back_to_admin())
         return
     text = "📋 *Все активные записи:*\n\n"
     for b in bookings:
+        confirmed = "✅" if b.get("confirmed_attendance") else "⏳"
         text += (
             f"#{b['id']} {b['name']} | {b['phone']}\n"
             f"   🎨 {b['class_title']}\n"
-            f"   📆 {fmt_date(b['class_date'])}\n\n"
+            f"   📆 {fmt_date(b['class_date'])}\n"
+            f"   {confirmed} Посещение подтверждено\n\n"
         )
-    # Разбиваем если слишком длинно
     if len(text) > 4000:
         text = text[:4000] + "\n\n_(показаны не все)_"
     await query.edit_message_text(text, reply_markup=back_to_admin(), parse_mode="Markdown")
 
 
-# ── Отмена записи ────────────────────────
 async def admin_cancel_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not is_admin(query.from_user.id):
-        return
     bookings = [b for b in load_bookings() if b["status"] == "confirmed"]
     if not bookings:
         await query.edit_message_text("Нет активных записей.", reply_markup=back_to_admin())
@@ -468,8 +857,6 @@ async def admin_cancel_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def do_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not is_admin(query.from_user.id):
-        return
     booking_id = int(query.data.split("_")[2])
     bookings = load_bookings()
     booking = next((b for b in bookings if b["id"] == booking_id), None)
@@ -478,7 +865,6 @@ async def do_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     booking["status"] = "cancelled"
     save_bookings(bookings)
-    # Уведомляем клиента
     try:
         await context.bot.send_message(
             booking["user_id"],
@@ -496,12 +882,9 @@ async def do_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ── Перенос записи ───────────────────────
 async def admin_reschedule_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not is_admin(query.from_user.id):
-        return
     bookings = [b for b in load_bookings() if b["status"] == "confirmed"]
     if not bookings:
         await query.edit_message_text("Нет активных записей.", reply_markup=back_to_admin())
@@ -535,8 +918,7 @@ async def reschedule_pick_booking(update: Update, context: ContextTypes.DEFAULT_
             continue
         if date < datetime.now() or mc["id"] == booking["class_id"]:
             continue
-        spots = get_available_spots(mc["id"])
-        if spots > 0:
+        if get_available_spots(mc["id"]) > 0:
             keyboard.append([InlineKeyboardButton(
                 f"{mc['title'][:30]} — {fmt_date(mc['date'])}",
                 callback_data=f"reschedule_to_{mc['id']}"
@@ -546,7 +928,7 @@ async def reschedule_pick_booking(update: Update, context: ContextTypes.DEFAULT_
         return
     keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_reschedule_list")])
     await query.edit_message_text(
-        f"🔄 Перенести запись #{booking_id} на:\n_(выберите новый мастер-класс)_",
+        f"🔄 Перенести запись #{booking_id} на:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
@@ -561,13 +943,18 @@ async def reschedule_to_class(update: Update, context: ContextTypes.DEFAULT_TYPE
     classes = load_classes()
     new_mc = next((m for m in classes if m["id"] == new_class_id), None)
     if not booking or not new_mc:
-        await query.edit_message_text("Ошибка. Попробуйте снова.", reply_markup=back_to_admin())
+        await query.edit_message_text("Ошибка.", reply_markup=back_to_admin())
         return
     old_title = booking["class_title"]
     old_date  = booking["class_date"]
     booking["class_id"]    = new_mc["id"]
     booking["class_title"] = new_mc["title"]
     booking["class_date"]  = new_mc["date"]
+    booking["venue_name"]  = new_mc.get("venue_name", "")
+    booking["venue_url"]   = new_mc.get("venue_url", "")
+    booking["confirmed_attendance"] = False
+    booking["reminder_24h_sent"]    = False
+    booking["reminder_1h_sent"]     = False
     save_bookings(bookings)
     try:
         await context.bot.send_message(
@@ -586,12 +973,9 @@ async def reschedule_to_class(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
-# ── Рассылка ─────────────────────────────
 async def admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not is_admin(query.from_user.id):
-        return
     classes = load_classes()
     keyboard = [[InlineKeyboardButton("📣 Всем пользователям бота", callback_data="broadcast_all")]]
     for mc in classes:
@@ -615,19 +999,14 @@ async def admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT_TY
 async def broadcast_target_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    target = query.data  # "broadcast_all" или "broadcast_class_ID"
-    context.user_data["broadcast_target"] = target
-    await query.edit_message_text(
-        "✏️ Введите текст сообщения для рассылки\n_(или /cancel для отмены)_:",
-        parse_mode="Markdown"
-    )
+    context.user_data["broadcast_target"] = query.data
+    await query.edit_message_text("✏️ Введите текст сообщения для рассылки:", parse_mode="Markdown")
     return BROADCAST_TEXT
 
 async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     target = context.user_data.get("broadcast_target", "broadcast_all")
     bookings = load_bookings()
-
     if target == "broadcast_all":
         user_ids = list({b["user_id"] for b in bookings if b["status"] == "confirmed"})
         label = "всем пользователям"
@@ -636,7 +1015,6 @@ async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_ids = list({b["user_id"] for b in bookings if b["class_id"] == class_id and b["status"] == "confirmed"})
         mc = next((m for m in load_classes() if m["id"] == class_id), None)
         label = f"записанным на «{mc['title'] if mc else class_id}»"
-
     sent = 0
     for uid in user_ids:
         try:
@@ -644,7 +1022,6 @@ async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent += 1
         except Exception:
             pass
-
     await update.message.reply_text(
         f"✅ Рассылка завершена!\nОтправлено {sent} из {len(user_ids)} ({label}).",
         reply_markup=back_to_admin()
@@ -652,12 +1029,12 @@ async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ── Расписание мастер-классов ─────────────
+# ══════════════════════════════════════════
+#  РАСПИСАНИЕ МК
+# ══════════════════════════════════════════
 async def admin_classes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not is_admin(query.from_user.id):
-        return
     classes = load_classes()
     keyboard = [[InlineKeyboardButton("➕ Добавить мастер-класс", callback_data="admin_add_mc")]]
     for mc in classes:
@@ -689,28 +1066,24 @@ async def admin_delete_mc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_delete_mc_{class_id}")],
         [InlineKeyboardButton("❌ Отмена", callback_data="admin_classes")],
     ]
-    await query.edit_message_text(
-        f"Удалить «{mc['title']}»?\n\n⚠️ Все записи на этот МК будут сохранены в архиве.",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text(f"Удалить «{mc['title']}»?", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def confirm_delete_mc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     class_id = int(query.data.split("_")[3])
-    classes = load_classes()
-    classes = [m for m in classes if m["id"] != class_id]
+    classes = [m for m in load_classes() if m["id"] != class_id]
     save_classes(classes)
     await query.edit_message_text("🗑 Мастер-класс удалён.", reply_markup=back_to_admin())
 
 
-# ── Добавление МК ────────────────────────
+# ── Добавление МК (теперь 8 шагов — добавили название и адрес кафе) ──
 async def admin_add_mc_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data["new_mc"] = {}
     await query.edit_message_text(
-        "➕ *Новый мастер-класс*\n\nШаг 1/6: Введите *название* МК:",
+        "➕ *Новый мастер-класс*\n\nШаг 1/8: Введите *название* МК:",
         parse_mode="Markdown"
     )
     return MC_TITLE
@@ -718,7 +1091,7 @@ async def admin_add_mc_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def mc_get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["new_mc"]["title"] = update.message.text
     await update.message.reply_text(
-        "Шаг 2/6: Введите *дату и время* в формате ДД.ММ.ГГГГ ЧЧ:ММ\nНапример: `05.08.2026 12:00`",
+        "Шаг 2/8: Введите *дату и время* в формате ДД.ММ.ГГГГ ЧЧ:ММ\nНапример: `05.08.2026 12:00`",
         parse_mode="Markdown"
     )
     return MC_DATE
@@ -730,17 +1103,17 @@ async def mc_get_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("❌ Неверный формат. Введите как: `05.08.2026 12:00`", parse_mode="Markdown")
         return MC_DATE
-    await update.message.reply_text("Шаг 3/6: Введите *длительность* (например: `3 часа`):", parse_mode="Markdown")
+    await update.message.reply_text("Шаг 3/8: Введите *длительность* (например: `3 часа`):", parse_mode="Markdown")
     return MC_DURATION
 
 async def mc_get_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["new_mc"]["duration"] = update.message.text
-    await update.message.reply_text("Шаг 4/6: Введите *цену* (например: `2500 ₽`):", parse_mode="Markdown")
+    await update.message.reply_text("Шаг 4/8: Введите *цену* (например: `2500 ₽`):", parse_mode="Markdown")
     return MC_PRICE
 
 async def mc_get_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["new_mc"]["price"] = update.message.text
-    await update.message.reply_text("Шаг 5/6: Сколько *мест* на МК? (число):", parse_mode="Markdown")
+    await update.message.reply_text("Шаг 5/8: Сколько *мест* на МК? (число):", parse_mode="Markdown")
     return MC_SPOTS
 
 async def mc_get_spots(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -749,20 +1122,55 @@ async def mc_get_spots(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("❌ Введите число, например: `8`", parse_mode="Markdown")
         return MC_SPOTS
-    await update.message.reply_text("Шаг 6/6: Введите *описание* МК:", parse_mode="Markdown")
+    await update.message.reply_text("Шаг 6/8: Введите *описание* МК:", parse_mode="Markdown")
     return MC_DESC
 
 async def mc_get_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["new_mc"]["description"] = update.message.text
+    await update.message.reply_text(
+        "Шаг 7/8: Введите *название кафе/места проведения*:\n"
+        "Например: `Кафе Море`",
+        parse_mode="Markdown"
+    )
+    return MC_VENUE_NAME
+
+async def mc_get_venue_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["new_mc"]["venue_name"] = update.message.text.strip()
+    await update.message.reply_text(
+        "Шаг 8/8: Вставьте *ссылку на Google Maps* для этого места:\n\n"
+        "Как получить ссылку:\n"
+        "1. Откройте Google Maps\n"
+        "2. Найдите место\n"
+        "3. Нажмите «Поделиться» → скопируйте ссылку\n\n"
+        "Вставьте ссылку:",
+        parse_mode="Markdown"
+    )
+    return MC_VENUE_URL
+
+async def mc_get_venue_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    if not url.startswith("http"):
+        await update.message.reply_text(
+            "❌ Ссылка должна начинаться с http или https.\nПопробуйте снова:",
+            parse_mode="Markdown"
+        )
+        return MC_VENUE_URL
+
     new_mc = context.user_data["new_mc"]
-    new_mc["description"] = update.message.text
+    new_mc["venue_url"] = url
     new_mc["id"] = next_mc_id()
     classes = load_classes()
     classes.append(new_mc)
     save_classes(classes)
+
+    venue_name = new_mc.get("venue_name", "")
+    venue_url  = new_mc.get("venue_url", "")
+
     await update.message.reply_text(
-        f"✅ Мастер-класс добавлен!\n\n"
+        f"✅ *Мастер-класс добавлен!*\n\n"
         f"*{new_mc['title']}*\n"
         f"📆 {fmt_date(new_mc['date'])}\n"
+        f"📍 [{venue_name}]({venue_url})\n"
         f"⏱ {new_mc['duration']} | 💰 {new_mc['price']}\n"
         f"👥 Мест: {new_mc['spots']}",
         reply_markup=back_to_admin(),
@@ -779,6 +1187,8 @@ FIELD_LABELS = {
     "price":       "Цена",
     "spots":       "Количество мест",
     "description": "Описание",
+    "venue_name":  "Название кафе",
+    "venue_url":   "Ссылка на Google Maps",
 }
 
 async def admin_edit_mc(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -809,7 +1219,11 @@ async def edit_mc_field_chosen(update: Update, context: ContextTypes.DEFAULT_TYP
     field = query.data.split("_")[2]
     context.user_data["editing_field"] = field
     label = FIELD_LABELS.get(field, field)
-    hint = " (формат: ДД.ММ.ГГГГ ЧЧ:ММ)" if field == "date" else ""
+    hints = {
+        "date": " (формат: ДД.ММ.ГГГГ ЧЧ:ММ)",
+        "venue_url": "\n\nВставьте ссылку из Google Maps (начинается с https://)",
+    }
+    hint = hints.get(field, "")
     await query.edit_message_text(
         f"Введите новое значение для *{label}*{hint}:",
         parse_mode="Markdown"
@@ -823,15 +1237,14 @@ async def edit_mc_value_save(update: Update, context: ContextTypes.DEFAULT_TYPE)
     classes  = load_classes()
     mc = next((m for m in classes if m["id"] == class_id), None)
     if not mc or not field:
-        await update.message.reply_text("Ошибка. Попробуйте снова.", reply_markup=back_to_admin())
+        await update.message.reply_text("Ошибка.", reply_markup=back_to_admin())
         return ConversationHandler.END
-
     if field == "date":
         try:
             dt = datetime.strptime(value, "%d.%m.%Y %H:%M")
             value = dt.strftime("%Y-%m-%d %H:%M")
         except ValueError:
-            await update.message.reply_text("❌ Неверный формат даты. Попробуйте: `05.08.2026 12:00`", parse_mode="Markdown")
+            await update.message.reply_text("❌ Неверный формат даты.", parse_mode="Markdown")
             return EDIT_MC_VALUE
     if field == "spots":
         try:
@@ -839,7 +1252,9 @@ async def edit_mc_value_save(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except ValueError:
             await update.message.reply_text("❌ Введите целое число.")
             return EDIT_MC_VALUE
-
+    if field == "venue_url" and not value.startswith("http"):
+        await update.message.reply_text("❌ Ссылка должна начинаться с https://")
+        return EDIT_MC_VALUE
     mc[field] = value
     save_classes(classes)
     await update.message.reply_text(
@@ -849,33 +1264,6 @@ async def edit_mc_value_save(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     return ConversationHandler.END
 
-
-# ══════════════════════════════════════════
-#  НАПОМИНАНИЯ
-# ══════════════════════════════════════════
-async def send_reminders(app):
-    bookings = load_bookings()
-    for b in bookings:
-        if b["status"] != "confirmed":
-            continue
-        try:
-            class_date = datetime.strptime(b["class_date"], "%Y-%m-%d %H:%M")
-        except Exception:
-            continue
-        diff = (class_date - datetime.now()).total_seconds() / 3600
-        if 23 <= diff <= 25:
-            try:
-                await app.bot.send_message(
-                    b["user_id"],
-                    f"⏰ *Напоминание!*\n\n"
-                    f"Завтра у вас мастер-класс:\n"
-                    f"🎨 {b['class_title']}\n"
-                    f"📆 {fmt_date(b['class_date'])}\n\n"
-                    f"До встречи! 💎",
-                    parse_mode="Markdown"
-                )
-            except Exception as e:
-                logger.error(f"Ошибка напоминания: {e}")
 
 async def cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Отменено.", reply_markup=back_to_admin())
@@ -888,7 +1276,6 @@ async def cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Запись клиента
     client_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(show_classes, pattern="^book$")],
         states={
@@ -898,7 +1285,6 @@ def main():
                 CallbackQueryHandler(show_classes,  pattern="^book$"),
             ],
             GET_NAME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            GET_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
             CONFIRM:   [CallbackQueryHandler(final_confirm, pattern="^final_confirm$")],
         },
         fallbacks=[
@@ -907,16 +1293,12 @@ def main():
         ],
     )
 
-    # Изменение приветствия
     welcome_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_welcome_start, pattern="^admin_welcome$")],
-        states={
-            EDIT_WELCOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_welcome_save)],
-        },
+        states={EDIT_WELCOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_welcome_save)]},
         fallbacks=[CommandHandler("cancel", cancel_conv)],
     )
 
-    # Рассылка
     broadcast_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_broadcast_start, pattern="^admin_broadcast$")],
         states={
@@ -926,21 +1308,21 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel_conv)],
     )
 
-    # Добавление МК
     add_mc_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_add_mc_start, pattern="^admin_add_mc$")],
         states={
-            MC_TITLE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_title)],
-            MC_DATE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_date)],
-            MC_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_duration)],
-            MC_PRICE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_price)],
-            MC_SPOTS:    [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_spots)],
-            MC_DESC:     [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_desc)],
+            MC_TITLE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_title)],
+            MC_DATE:       [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_date)],
+            MC_DURATION:   [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_duration)],
+            MC_PRICE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_price)],
+            MC_SPOTS:      [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_spots)],
+            MC_DESC:       [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_desc)],
+            MC_VENUE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_venue_name)],
+            MC_VENUE_URL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, mc_get_venue_url)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conv)],
     )
 
-    # Редактирование МК
     edit_mc_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_edit_mc, pattern="^admin_edit_mc_")],
         states={
@@ -950,7 +1332,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel_conv)],
     )
 
-    # Регистрация хэндлеров
     app.add_handler(CommandHandler("start",  start))
     app.add_handler(CommandHandler("admin",  admin_panel_cmd))
     app.add_handler(client_conv)
@@ -958,26 +1339,34 @@ def main():
     app.add_handler(broadcast_conv)
     app.add_handler(add_mc_conv)
     app.add_handler(edit_mc_conv)
-    app.add_handler(CallbackQueryHandler(admin_panel,           pattern="^admin_panel$"))
-    app.add_handler(CallbackQueryHandler(admin_bookings,        pattern="^admin_bookings$"))
-    app.add_handler(CallbackQueryHandler(admin_classes,         pattern="^admin_classes$"))
-    app.add_handler(CallbackQueryHandler(admin_cancel_list,     pattern="^admin_cancel_list$"))
-    app.add_handler(CallbackQueryHandler(do_cancel,             pattern="^do_cancel_"))
-    app.add_handler(CallbackQueryHandler(admin_reschedule_list, pattern="^admin_reschedule_list$"))
+    app.add_handler(CallbackQueryHandler(admin_panel,             pattern="^admin_panel$"))
+    app.add_handler(CallbackQueryHandler(admin_bookings,          pattern="^admin_bookings$"))
+    app.add_handler(CallbackQueryHandler(admin_classes,           pattern="^admin_classes$"))
+    app.add_handler(CallbackQueryHandler(admin_cancel_list,       pattern="^admin_cancel_list$"))
+    app.add_handler(CallbackQueryHandler(do_cancel,               pattern="^do_cancel_"))
+    app.add_handler(CallbackQueryHandler(admin_reschedule_list,   pattern="^admin_reschedule_list$"))
     app.add_handler(CallbackQueryHandler(reschedule_pick_booking, pattern="^reschedule_pick_"))
-    app.add_handler(CallbackQueryHandler(reschedule_to_class,   pattern="^reschedule_to_"))
-    app.add_handler(CallbackQueryHandler(admin_delete_mc,       pattern="^admin_delete_mc_"))
-    app.add_handler(CallbackQueryHandler(confirm_delete_mc,     pattern="^confirm_delete_mc_"))
-    app.add_handler(CallbackQueryHandler(my_bookings,           pattern="^my_bookings$"))
-    app.add_handler(CallbackQueryHandler(help_callback,         pattern="^help$"))
-    app.add_handler(CallbackQueryHandler(main_menu_callback,    pattern="^main_menu$"))
+    app.add_handler(CallbackQueryHandler(reschedule_to_class,     pattern="^reschedule_to_"))
+    app.add_handler(CallbackQueryHandler(admin_delete_mc,         pattern="^admin_delete_mc_"))
+    app.add_handler(CallbackQueryHandler(confirm_delete_mc,       pattern="^confirm_delete_mc_"))
+    app.add_handler(CallbackQueryHandler(my_bookings,             pattern="^my_bookings$"))
+    app.add_handler(CallbackQueryHandler(help_callback,           pattern="^help$"))
+    app.add_handler(CallbackQueryHandler(main_menu_callback,      pattern="^main_menu$"))
+    # Подтверждение/перенос от пользователя
+    app.add_handler(CallbackQueryHandler(attendance_confirm,       pattern="^attend_confirm_"))
+    app.add_handler(CallbackQueryHandler(attendance_reschedule,    pattern="^attend_reschedule_"))
+    app.add_handler(CallbackQueryHandler(attendance_cancel,        pattern="^attend_cancel_"))
+    app.add_handler(CallbackQueryHandler(user_reschedule_confirm,  pattern="^user_reschedule_"))
+    app.add_handler(CallbackQueryHandler(user_move_booking,        pattern="^user_move_"))
+    app.add_handler(CallbackQueryHandler(user_cancel_booking,      pattern="^user_cancel_[0-9]+$"))
+    app.add_handler(CallbackQueryHandler(user_cancel_confirm,      pattern="^user_cancel_confirm_"))
 
-    # Напоминания — каждый час
+    # Напоминания каждые 30 минут
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(send_reminders, "interval", hours=1, args=[app])
+    scheduler.add_job(send_reminders, "interval", minutes=30, args=[app])
     scheduler.start()
 
-    print("✅ Бот v2.0 запущен!")
+    print("✅ Бот v3.1 запущен!")
     app.run_polling()
 
 if __name__ == "__main__":
