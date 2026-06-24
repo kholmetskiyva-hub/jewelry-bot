@@ -52,6 +52,7 @@ DEFAULT_SETTINGS = {
 # ══════════════════════════════════════════
 (CHOOSE_CLASS, GET_NAME, CONFIRM) = range(3)
 EDIT_WELCOME = 10
+EDIT_NEW_GREETING = 11
 (BROADCAST_TARGET, BROADCAST_SELECT_CLASS, BROADCAST_TEXT) = range(20, 23)
 (MC_TITLE, MC_DATE, MC_DURATION, MC_PRICE, MC_SPOTS, MC_DESC, MC_VENUE_NAME, MC_VENUE_URL) = range(30, 38)
 (EDIT_MC_CHOOSE, EDIT_MC_FIELD, EDIT_MC_VALUE) = range(40, 43)
@@ -117,16 +118,42 @@ def next_mc_id():
 # ══════════════════════════════════════════
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = load_settings()
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name or "друг"
+
     keyboard = [
         [InlineKeyboardButton("📅 Записаться на мастер-класс", callback_data="book")],
         [InlineKeyboardButton("📋 Мои записи", callback_data="my_bookings")],
         [InlineKeyboardButton("❓ Помощь", callback_data="help")],
     ]
-    if is_admin(update.effective_user.id):
+    if is_admin(user_id):
         keyboard.append([InlineKeyboardButton("⚙️ Админ-панель", callback_data="admin_panel")])
+
+    # Проверяем новый ли пользователь
+    known_users = settings.get("known_users", [])
+    is_new = user_id not in known_users
+
+    if is_new:
+        # Сохраняем пользователя
+        known_users.append(user_id)
+        settings["known_users"] = known_users
+        save_settings(settings)
+
+        # Приветствие новому пользователю
+        greeting = settings.get("new_user_greeting",
+            f"👋 Привет, {user_name}! Рада видеть тебя впервые!\n\n"
+            f"Я помогу тебе записаться на мастер-класс по созданию украшений 💎\n\n"
+        )
+        # Подставляем имя если есть плейсхолдер
+        greeting = greeting.replace("{name}", user_name)
+        welcome_text = greeting + "\n" + settings["welcome_message"]
+    else:
+        welcome_text = settings["welcome_message"]
+
     await update.message.reply_text(
-        settings["welcome_message"],
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        welcome_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
     )
 
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -767,7 +794,8 @@ async def send_reminders(app):
 # ══════════════════════════════════════════
 def admin_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✏️ Изменить приветствие",    callback_data="admin_welcome")],
+        [InlineKeyboardButton("👋 Приветствие новых",        callback_data="admin_new_greeting")],
+        [InlineKeyboardButton("✏️ Изменить гл. приветствие", callback_data="admin_welcome")],
         [InlineKeyboardButton("📋 Все записи",              callback_data="admin_bookings")],
         [InlineKeyboardButton("❌ Отменить запись",          callback_data="admin_cancel_list")],
         [InlineKeyboardButton("🔄 Перенести запись",         callback_data="admin_reschedule_list")],
@@ -809,6 +837,33 @@ async def admin_welcome_save(update: Update, context: ContextTypes.DEFAULT_TYPE)
     settings["welcome_message"] = update.message.text
     save_settings(settings)
     await update.message.reply_text("✅ Приветствие обновлено!", reply_markup=back_to_admin())
+    return ConversationHandler.END
+
+
+async def admin_new_greeting_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    settings = load_settings()
+    current = settings.get("new_user_greeting",
+        "👋 Привет, {name}! Рада видеть тебя впервые!\n\n"
+        "Я помогу тебе записаться на мастер-класс по созданию украшений 💎\n\n"
+    )
+    await query.edit_message_text(
+        f"👋 *Текущее приветствие для новых пользователей:*\n\n{current}\n\n"
+        f"_Подсказка: используйте {{name}} чтобы подставить имя пользователя_\n\n"
+        f"Отправьте новый текст (или /cancel для отмены):",
+        parse_mode="Markdown"
+    )
+    return EDIT_NEW_GREETING
+
+async def admin_new_greeting_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    settings = load_settings()
+    settings["new_user_greeting"] = update.message.text
+    save_settings(settings)
+    await update.message.reply_text(
+        "✅ Приветствие для новых пользователей обновлено!",
+        reply_markup=back_to_admin()
+    )
     return ConversationHandler.END
 
 
@@ -1401,12 +1456,27 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     async def post_init(application: Application) -> None:
         """Устанавливает постоянное меню команд в Telegram"""
+        from telegram import BotCommandScopeDefault, BotCommandScopeChat
+
+        # Меню для всех пользователей
         await application.bot.set_my_commands([
             ("book",       "📅 Записаться на МК"),
             ("mybookings", "📋 Мои записи"),
             ("move",       "🔄 Перенести запись"),
             ("cancel",     "❌ Отменить запись"),
-        ])
+        ], scope=BotCommandScopeDefault())
+
+        # Расширенное меню для админа
+        try:
+            await application.bot.set_my_commands([
+                ("book",       "📅 Записаться на МК"),
+                ("mybookings", "📋 Мои записи"),
+                ("move",       "🔄 Перенести запись"),
+                ("cancel",     "❌ Отменить запись"),
+                ("admin",      "⚙️ Админ-панель"),
+            ], scope=BotCommandScopeChat(chat_id=ADMIN_CHAT_ID))
+        except Exception as e:
+            logger.warning(f"Не удалось установить меню для админа: {e}")
 
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
@@ -1430,6 +1500,12 @@ def main():
     welcome_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_welcome_start, pattern="^admin_welcome$")],
         states={EDIT_WELCOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_welcome_save)]},
+        fallbacks=[CommandHandler("cancel", cancel_conv)],
+    )
+
+    new_greeting_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_new_greeting_start, pattern="^admin_new_greeting$")],
+        states={EDIT_NEW_GREETING: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_new_greeting_save)]},
         fallbacks=[CommandHandler("cancel", cancel_conv)],
     )
 
@@ -1474,6 +1550,7 @@ def main():
     app.add_handler(CommandHandler("cancel",     cmd_cancel))
     app.add_handler(client_conv)
     app.add_handler(welcome_conv)
+    app.add_handler(new_greeting_conv)
     app.add_handler(broadcast_conv)
     app.add_handler(add_mc_conv)
     app.add_handler(edit_mc_conv)
