@@ -72,6 +72,16 @@ DEFAULT_SETTINGS = {
     "known_users": []
 }
 
+def safe_text(value, fallback="Выберите действие:"):
+    """Telegram не принимает пустые сообщения."""
+    if value is None:
+        return fallback
+    value = str(value)
+    if not value.strip():
+        return fallback
+    return value
+
+
 def _load(path, default):
     if os.path.exists(path):
         try:
@@ -192,13 +202,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s    = load_settings()
 
     known = s.setdefault("known_users", [])
+    welcome = safe_text(s.get("welcome_message"), DEFAULT_SETTINGS["welcome_message"])
+    greeting_tpl = s.get("new_user_greeting", "")
+
     if uid not in known:
         known.append(uid)
         save_settings(s)
-        greeting = s.get("new_user_greeting", "").replace("{name}", name)
-        text = greeting + s.get("welcome_message", "")
+        greeting = greeting_tpl.replace("{name}", name) if greeting_tpl else ""
+        text = safe_text(greeting + welcome, DEFAULT_SETTINGS["welcome_message"])
     else:
-        text = s.get("welcome_message", "")
+        text = safe_text(welcome, DEFAULT_SETTINGS["welcome_message"])
 
     await update.message.reply_text(text, reply_markup=kb_main(uid), parse_mode="Markdown")
 
@@ -230,7 +243,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         set_state(context, None)
         s = load_settings()
         await q.edit_message_text(
-            s.get("welcome_message", "Выберите действие:"),
+            safe_text(s.get("welcome_message"), "Выберите действие:"),
             reply_markup=kb_main(uid),
             parse_mode="Markdown"
         )
@@ -641,7 +654,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Нет активного состояния — показываем меню
         s = load_settings()
         await update.message.reply_text(
-            s.get("welcome_message", "Выберите действие:"),
+            safe_text(s.get("welcome_message"), "Выберите действие:"),
             reply_markup=kb_main(uid),
             parse_mode="Markdown"
         )
@@ -860,7 +873,7 @@ async def dispatch_admin(q, context, uid, cmd):
         s = load_settings()
         await q.edit_message_text(
             f"✏️ *Настройки приветствия*\n\n"
-            f"*Текущее приветствие:*\n{s.get('welcome_message','')}\n\n"
+            f"*Текущее приветствие:*\n{safe_text(s.get("welcome_message"), DEFAULT_SETTINGS["welcome_message"])}\n\n"
             f"*Для новых пользователей:*\n{s.get('new_user_greeting','')}",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("✏️ Изменить приветствие", callback_data="adm:edit_welcome")],
