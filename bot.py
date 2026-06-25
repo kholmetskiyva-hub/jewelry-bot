@@ -20,7 +20,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 # ══════════════════════════════════════════
 #  НАСТРОЙКИ
 # ══════════════════════════════════════════
-BOT_TOKEN        = "8559079528:AAEOXFQcqwMmAqi0H-b67vozQuhYsBa_mXc"
+BOT_TOKEN        = os.getenv("BOT_TOKEN", "")
 MAIN_ADMIN_ID    = 334195585
 CHANNEL_USERNAME = "@JJewelryNhaTrang"
 
@@ -202,6 +202,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(text, reply_markup=kb_main(uid), parse_mode="Markdown")
 
+async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    set_state(context, None)
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("⛔ Нет доступа.")
+        return
+    await update.message.reply_text(
+        "⚙️ *Админ-панель*\n\nВыберите действие:",
+        reply_markup=kb_admin(),
+        parse_mode="Markdown"
+    )
+
+
 # ══════════════════════════════════════════
 #  ГЛАВНЫЙ ДИСПЕТЧЕР CALLBACK
 # ══════════════════════════════════════════
@@ -209,6 +222,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q    = update.callback_query
     data = q.data
     uid  = q.from_user.id
+    logger.info("🔘 CALLBACK from %s: %s", uid, data)
     await q.answer()
 
     # ── Главное меню ──────────────────────────────────────
@@ -540,6 +554,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_state(context)
     uid   = update.effective_user.id
     text  = update.message.text.strip()
+    logger.info("💬 TEXT from %s | state=%s | text=%r", uid, state, text)
 
     if state == "booking_name":
         context.user_data["draft"]["name"] = text
@@ -1233,6 +1248,9 @@ async def on_error(update, context: ContextTypes.DEFAULT_TYPE):
 #  ЗАПУСК
 # ══════════════════════════════════════════
 def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN не задан в переменных Railway")
+
     async def post_init(app: Application):
         user_cmds = [
             ("start",       "🏠 Главное меню"),
@@ -1251,14 +1269,7 @@ def main():
 
     # Команды
     app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("admin", lambda u, c: (
-        u.message.reply_text(
-            "⚙️ *Админ-панель*\n\nВыберите действие:",
-            reply_markup=kb_admin(),
-            parse_mode="Markdown"
-        ) if is_admin(u.effective_user.id) else
-        u.message.reply_text("⛔ Нет доступа.")
-    )))
+    app.add_handler(CommandHandler("admin", cmd_admin))
 
     # Один глобальный обработчик всех callback
     app.add_handler(CallbackQueryHandler(on_callback))
